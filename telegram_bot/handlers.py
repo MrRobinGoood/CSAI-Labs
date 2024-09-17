@@ -1,86 +1,74 @@
-import time
-import datetime
+import json_lines
 
 from aiogram import Bot, Router
 from aiogram import F
 from aiogram.types import Message
 from aiogram.filters import Command
-from keyboards import instruction, trade_card
-from aiogram.filters import Filter, CommandObject
-
+from keyboards import instruction
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+import re
+import wikipedia
 router = Router()
-
-
-class IsCreator(Filter):
-    async def __call__(self, message: Message, bot: Bot) -> bool:
-        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-        print(member.status)
-        return member.status == member.status.CREATOR
-
-class IsPrivate(Filter):
-    async def __call__(self, message: Message) -> bool:
-        if message.chat.type != "private":
-            await message.reply(f"Данная команда поддерживается только в личных сообщениях @TenderCoinBot")
-        return message.chat.type == "private"
-
-class HasArgs(Filter):
-    async def __call__(self, message: Message, command: CommandObject) -> bool:
-        if not command.args:
-            await message.reply(f"Ошибка! Пожалуйста укажите аргументы для команды.")
-        return bool(command.args)
-async def reply_not_allowed(message: Message):
-    await message.reply("Данная функция недоступна в чатах с задачами!")
-
-
+from lab1.clear_text import clear_str
+wikipedia.set_lang("ru")
 @router.message(Command('start'))
 async def start(message: Message):
-    await message.answer("Добро пожаловать в TenderCoin Бот! Для помощи напишите /help")
+    await message.answer("Добро пожаловать в КСИИ Бот!")
     await message.delete()
 
-@router.message(Command('help'))
-async def help(message: Message):
-    await message.answer("Инструкция по использованию бота:\n-\n-\n-", reply_markup=instruction)
-    await message.delete()
+@router.message()
+async def messaging(message: Message):
+    await message.answer(find_similar_answer(message.text))
 
-@router.message(Command('tc'), HasArgs())
-async def help(message: Message, command: CommandObject):
-    #поиск торговой карточки if not tc
-    # await message.reply("Ошибка! Торговой карточки с данным номером не найдено.")
-    await message.answer(f"Торговая карточка №{command.args}.\nНазвание: блабла\n-\n-\n", reply_markup=trade_card)
-    await message.delete()
 
-# @router.message(Command('start'))
-# async def start(message: Message):
-#     await message.answer(
-#         f'Страница 1 из 3\n<blockquote><b>Тендер на закупку оборудования - 056734</b>\n<code>/open_tc345672</code>\nНачальная цена - 100000\nОрганизатор - Муниципальный округ\n<code>/open cmp23471</code>\nМесто поставки - Россия\n<code>/like 345672</code> <code>/collect 345672</code></blockquote>',
-#         parse_mode="html")
-#
-# @router.message(Command('delete_topic'))
-# async def start(message: Message, bot: Bot):
-#     await bot.close_forum_topic(chat_id=message.chat.id, message_thread_id=message.message_thread_id)
-#
-#
-# @router.message(Command('pin'))
-# async def start(message: Message, bot: Bot):
-#     await message.pin()
-#
-#
-# @router.message(Command('new'))
-# async def start(message: Message, bot: Bot):
-#     forumTopic = await bot.create_forum_topic(message.chat.id, f'новый топик {i}')
-#     await bot.send_message(chat_id=message.chat.id, message_thread_id=forumTopic.message_thread_id,
-#                            text=f'Новый топик {i} успешно создан!')
-#
-#
-#
-# @router.message(Command('invite'))
-# async def start(message: Message, bot: Bot):
-#     link = await bot.create_chat_invite_link(chat_id=message.chat.id,
-#                                              expire_date=datetime.datetime.now() + datetime.timedelta(days=1),
-#                                              member_limit=1)
-#     await message.answer(f'Ссылка приглашение: {link.invite_link}')
-#
-#
-# @router.message(F.text)
-# async def start(message: Message):
-#     print(message.text)
+dialogs = []
+with open('./resources/dataset.jsonl', 'rb') as f:
+    for item in json_lines.reader(f):
+        question = item.get("question")
+        answer = item.get("answer")
+        if question is not None and answer is not None:
+            dialogs.append((question, answer))
+dialogs = dialogs[:30000]
+
+vectorizer = TfidfVectorizer()
+X = vectorizer.fit_transform([q + " " + a for q, a in dialogs])
+y = np.array([i for i in range(len(dialogs))])
+
+
+def getwiki(s):
+    try:
+        ny = wikipedia.page(s)
+        wikitext=ny.content[:1000]
+        wikimas=wikitext.split('.')
+        wikimas = wikimas[:-1]
+        wikitext2 = ''
+        for x in wikimas:
+            if not('==' in x):
+                if(len((x.strip()))>3):
+                   wikitext2=wikitext2+x+'.'
+            else:
+                break
+        wikitext2=re.sub('\([^()]*\)', '', wikitext2)
+        wikitext2=re.sub('\([^()]*\)', '', wikitext2)
+        wikitext2=re.sub('\{[^\{\}]*\}', '', wikitext2)
+        return wikitext2
+    except Exception as e:
+        return 'В Википедии нет информации об этом'
+
+def find_similar_answer(question):
+
+    cq = clear_str(question)
+    template = ['вики','википедия','wiki','wikipedia','вика']
+    print(cq)
+    for i in range(len(cq)):
+        if cq[i] in template:
+            return getwiki(' '.join(cq[i+1:]))
+    else:
+        query_vector = vectorizer.transform([question])
+        distances = np.dot(X.toarray(), query_vector.toarray().T)
+        nearest_idx = np.argmax(distances)
+        similar_question, similar_answer = dialogs[nearest_idx]
+        return similar_answer
+
+
